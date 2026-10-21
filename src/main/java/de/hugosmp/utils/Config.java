@@ -20,7 +20,7 @@ public final class Config {
     public boolean durabilityHud = true;
 
     // Pay
-    public boolean payGui = true;
+    public boolean payOverride = false; // true = auch /pay öffnet das Menü
     public boolean payConfirm = true;
     public long payConfirmAbove = 1_000_000L;
     public String payCommand = "pay {player} {amount}";
