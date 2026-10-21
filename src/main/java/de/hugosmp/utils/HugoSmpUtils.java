@@ -19,6 +19,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
+import java.util.OptionalLong;
 
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.argument;
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.literal;
@@ -75,76 +76,101 @@ public class HugoSmpUtils implements ClientModInitializer {
         LOGGER.info("HugoSMP Utils geladen.");
     }
 
-    private static String expandIfEnabled(String s) {
-        return Config.get().expandInCommands ? NumberParser.expand(s) : s;
-    }
-
+    /**
+     * Alles läuft über /hugomod:
+     *   /hugomod                      Einstellungen
+     *   /pay                          Pay-Menü (nur wenn in den Einstellungen aktiviert)
+     *   /hugomod pay                  Pay-Menü
+     *   /hugomod pay <name> <betrag>  direkt bezahlen
+     *   /hugomod order <item>         Order-Automatik
+     *   /hugomod settings             Einstellungen
+     *   /hugomod calc <ausdruck>      Taschenrechner
+     */
     private static void registerCommands() {
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
-            // /hugomod -> Pay-Menü, /hugomod settings -> Einstellungen
             dispatcher.register(literal("hugomod")
                     .executes(ctx -> {
-                        Util.openLater(new PayScreen());
+                        Util.openLater(new SettingsScreen(null));
                         return 1;
                     })
                     .then(literal("settings").executes(ctx -> {
                         Util.openLater(new SettingsScreen(null));
                         return 1;
-                    })));
+                    }))
+                    .then(literal("pay")
+                            .executes(ctx -> {
+                                Util.openLater(new PayScreen());
+                                return 1;
+                            })
+                            .then(argument("spieler", StringArgumentType.word())
+                                    .suggests((ctx, b) -> CommandSource.suggestMatching(Config.get().knownPlayers, b))
+                                    .then(argument("betrag", StringArgumentType.word()).executes(ctx -> {
+                                        directPay(StringArgumentType.getString(ctx, "spieler"),
+                                                StringArgumentType.getString(ctx, "betrag"));
+                                        return 1;
+                                    }))))
+                    .then(literal("order")
+                            .then(argument("item", StringArgumentType.greedyString())
+                                    .suggests((ctx, b) -> CommandSource.suggestMatching(
+                                            Registries.ITEM.getIds().stream().map(Identifier::getPath), b))
+                                    .executes(ctx -> {
+                                        runOrder(StringArgumentType.getString(ctx, "item"));
+                                        return 1;
+                                    })))
+                    .then(literal("calc")
+                            .then(argument("ausdruck", StringArgumentType.greedyString()).executes(ctx -> {
+                                String expr = StringArgumentType.getString(ctx, "ausdruck");
+                                try {
+                                    BigDecimal r = NumberParser.eval(expr);
+                                    ctx.getSource().sendFeedback(Text.literal(expr + " = " + NumberParser.pretty(r)
+                                            + " (" + r.stripTrailingZeros().toPlainString() + ")"));
+                                } catch (Exception e) {
+                                    ctx.getSource().sendError(Text.literal("Ungültiger Ausdruck: " + e.getMessage()));
+                                }
+                                return 1;
+                            }))));
 
-            // /pay: nur abgefangen, wenn in den Einstellungen aktiviert; sonst normal an den Server
+            // /pay: öffnet das Menü NUR wenn in /hugomod > Pay eingeschaltet, sonst normal an den Server
             dispatcher.register(literal("pay").requires(s -> !Util.forwarding && Config.get().payOverride)
                     .executes(ctx -> {
                         Util.openLater(new PayScreen());
                         return 1;
                     })
                     .then(argument("args", StringArgumentType.greedyString()).executes(ctx -> {
-                        Util.sendCommand("pay " + expandIfEnabled(StringArgumentType.getString(ctx, "args")));
+                        String a = StringArgumentType.getString(ctx, "args");
+                        Util.sendCommand("pay " + (Config.get().expandInCommands ? NumberParser.expand(a) : a));
                         return 1;
                     })));
-
-            // /order <item>
-            dispatcher.register(literal("order").requires(s -> !Util.forwarding)
-                    .executes(ctx -> {
-                        Util.sendCommand("order");
-                        return 1;
-                    })
-                    .then(argument("item", StringArgumentType.greedyString())
-                            .suggests((ctx, b) -> CommandSource.suggestMatching(
-                                    Registries.ITEM.getIds().stream().map(Identifier::getPath), b))
-                            .executes(ctx -> {
-                                runOrder(StringArgumentType.getString(ctx, "item"));
-                                return 1;
-                            })));
-
-            // /hugosmp -> Einstellungen
-            dispatcher.register(literal("hugosmp").executes(ctx -> {
-                Util.openLater(new SettingsScreen(null));
-                return 1;
-            }));
-
-            // /calc 150k*3+2m
-            dispatcher.register(literal("calc").then(argument("ausdruck", StringArgumentType.greedyString()).executes(ctx -> {
-                String expr = StringArgumentType.getString(ctx, "ausdruck");
-                try {
-                    BigDecimal r = NumberParser.eval(expr);
-                    ctx.getSource().sendFeedback(Text.literal(expr + " = " + NumberParser.pretty(r)
-                            + " (" + r.stripTrailingZeros().toPlainString() + ")"));
-                } catch (Exception e) {
-                    ctx.getSource().sendError(Text.literal("Ungültiger Ausdruck: " + e.getMessage()));
-                }
-                return 1;
-            })));
         });
+    }
+
+    private static void directPay(String name, String amountText) {
+        if (!Config.isValidName(name)) {
+            Util.msg("Ungültiger Spielername.");
+            return;
+        }
+        OptionalLong v = NumberParser.parseAmount(amountText);
+        if (v.isEmpty() || v.getAsLong() <= 0) {
+            Util.msg("Ungültiger Betrag.");
+            return;
+        }
+        Config c = Config.get();
+        String cmd = c.payCommand.replace("{player}", name).replace("{amount}", Long.toString(v.getAsLong()));
+        c.remember(name);
+        c.save();
+        Util.msg("Sende: /" + cmd);
+        Util.sendCommand(cmd);
     }
 
     private static void runOrder(String item) {
         Config c = Config.get();
+        String cmd = c.orderCommand.replace("{item}", item);
         if (!c.orderEnabled) {
-            Util.sendCommand("order " + item);
+            Util.sendCommand(cmd);
             return;
         }
-        Util.sendCommand(c.orderCommand.replace("{item}", item));
+        Util.msg("Sende: /" + cmd + " - Automatik läuft ...");
+        Util.sendCommand(cmd);
         OrderAutomation.start(item);
     }
 }
