@@ -12,13 +12,19 @@ import net.minecraft.util.Formatting;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Locale;
+import java.util.Map;
 import java.util.OptionalLong;
+import java.util.Set;
 
-/** Pay-Menü: Spieler aus der Liste wählen, Betrag eingeben (Kürzel erlaubt), bezahlen. */
+/**
+ * Pay-Menü: Spieler wählen (online = mit Kopf, bekannte/offline = grau, oder Namen einfach eintippen),
+ * Betrag eingeben (Kürzel erlaubt), bezahlen.
+ */
 public class PayScreen extends Screen {
     private static final int W = 260, ROW_H = 16, ROWS = 8;
 
@@ -27,6 +33,7 @@ public class PayScreen extends Screen {
     private final List<String> all = new ArrayList<>();
     private final Map<String, PlayerListEntry> entries = new HashMap<>();
     private List<String> filtered = new ArrayList<>();
+    private String custom; // eingetippter Name, der in keiner Liste vorkommt
     private int scroll, listX, listY, top, ay;
     private String selected;
     private String searchText = "";
@@ -44,20 +51,31 @@ public class PayScreen extends Screen {
     @Override
     protected void init() {
         MinecraftClient mc = MinecraftClient.getInstance();
+        Config cfg = Config.get();
         all.clear();
         entries.clear();
+        String me = mc.player != null ? mc.player.getName().getString() : "";
+        Set<String> seen = new HashSet<>();
+        boolean changed = false;
+
+        // 1) Alle, die gerade online sind (mit Kopf)
         if (mc.getNetworkHandler() != null) {
-            String me = mc.player != null ? mc.player.getName().getString() : "";
             for (PlayerListEntry e : mc.getNetworkHandler().getPlayerList()) {
                 String n = e.getProfile().getName();
-                if (n != null && !n.equalsIgnoreCase(me)) {
+                if (n == null || n.equalsIgnoreCase(me)) continue;
+                if (seen.add(n.toLowerCase(Locale.ROOT))) {
                     all.add(n);
                     entries.put(n, e);
                 }
+                if (cfg.remember(n)) changed = true;
             }
         }
-        all.sort(String.CASE_INSENSITIVE_ORDER);
-        if (selected != null && all.stream().noneMatch(n -> n.equalsIgnoreCase(selected))) selected = null;
+        // 2) Alle, die die Mod schon mal gesehen hat (auch offline)
+        for (String k : cfg.knownPlayers) {
+            if (!k.equalsIgnoreCase(me) && seen.add(k.toLowerCase(Locale.ROOT))) all.add(k);
+        }
+        if (changed) cfg.save();
+        all.sort(Comparator.comparing((String n) -> !entries.containsKey(n)).thenComparing(String.CASE_INSENSITIVE_ORDER));
 
         top = Math.max(6, this.height / 2 - 118);
         int x = (this.width - W) / 2;
@@ -66,7 +84,8 @@ public class PayScreen extends Screen {
         ay = listY + ROWS * ROW_H + 18;
 
         search = new TextFieldWidget(this.textRenderer, x, top + 16, W, 18, Text.literal("Suche"));
-        search.setPlaceholder(Text.literal("Spieler suchen ..."));
+        search.setPlaceholder(Text.literal("Spieler suchen oder Namen eintippen ..."));
+        search.setMaxLength(24);
         search.setText(searchText);
         search.setChangedListener(s -> {
             searchText = s;
@@ -103,10 +122,18 @@ public class PayScreen extends Screen {
     }
 
     private void refilter() {
-        String q = searchText.toLowerCase(Locale.ROOT).trim();
+        String q = searchText.trim();
+        String ql = q.toLowerCase(Locale.ROOT);
         filtered = new ArrayList<>();
+        custom = null;
+        boolean exact = false;
         for (String n : all) {
-            if (q.isEmpty() || n.toLowerCase(Locale.ROOT).contains(q)) filtered.add(n);
+            if (ql.isEmpty() || n.toLowerCase(Locale.ROOT).contains(ql)) filtered.add(n);
+            if (n.equalsIgnoreCase(q)) exact = true;
+        }
+        if (!ql.isEmpty() && !exact && Config.isValidName(q)) {
+            custom = q;
+            filtered.add(0, q);
         }
         scroll = Math.min(scroll, Math.max(0, filtered.size() - ROWS));
     }
@@ -117,8 +144,9 @@ public class PayScreen extends Screen {
     }
 
     private void submit() {
+        if (selected == null && Config.isValidName(searchText)) selected = searchText.trim();
         if (selected == null) {
-            status = Text.literal("Bitte einen Spieler auswählen.");
+            status = Text.literal("Bitte einen Spieler auswählen oder Namen eintippen.");
             return;
         }
         OptionalLong v = NumberParser.parseAmount(amountText);
@@ -136,6 +164,7 @@ public class PayScreen extends Screen {
         String cmd = c.payCommand.replace("{player}", selected).replace("{amount}", Long.toString(v.getAsLong()));
         c.lastPayPlayer = selected;
         c.lastPayAmount = amountText;
+        c.remember(selected);
         c.save();
         close();
         Util.sendCommand(cmd);
@@ -152,7 +181,7 @@ public class PayScreen extends Screen {
         // Spielerliste
         ctx.fill(x, listY, x + W, listY + ROWS * ROW_H, 0x90000000);
         if (filtered.isEmpty()) {
-            ctx.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Keine Spieler gefunden"),
+            ctx.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Keine Spieler gefunden - Namen eintippen"),
                     x + W / 2, listY + ROWS * ROW_H / 2 - 4, 0x999999);
         }
         for (int i = 0; i < ROWS; i++) {
@@ -163,9 +192,14 @@ public class PayScreen extends Screen {
             boolean hover = mouseX >= x && mouseX < x + W && mouseY >= y && mouseY < y + ROW_H;
             if (name.equals(selected)) ctx.fill(x, y, x + W, y + ROW_H, 0xAA3A7BD5);
             else if (hover) ctx.fill(x, y, x + W, y + ROW_H, 0x40FFFFFF);
+
+            if (name.equals(custom)) {
+                ctx.drawText(this.textRenderer, "+ \"" + name + "\" verwenden", x + 4, y + 4, 0xFFD700, false);
+                continue;
+            }
             PlayerListEntry pe = entries.get(name);
             if (pe != null) PlayerSkinDrawer.draw(ctx, pe.getSkinTextures(), x + 3, y + 2, 12);
-            ctx.drawText(this.textRenderer, name, x + 20, y + 4, 0xFFFFFF, false);
+            ctx.drawText(this.textRenderer, name, x + 20, y + 4, pe != null ? 0xFFFFFF : 0x888888, false);
         }
         if (filtered.size() > ROWS) {
             int barH = Math.max(10, ROWS * ROW_H * ROWS / filtered.size());
