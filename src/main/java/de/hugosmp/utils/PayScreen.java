@@ -2,6 +2,7 @@ package de.hugosmp.utils;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.PlayerSkinDrawer;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
@@ -11,17 +12,20 @@ import net.minecraft.util.Formatting;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.util.OptionalLong;
 
 /** Pay-Menü: Spieler aus der Liste wählen, Betrag eingeben (Kürzel erlaubt), bezahlen. */
 public class PayScreen extends Screen {
-    private static final int W = 260, ROW_H = 14, ROWS = 8;
+    private static final int W = 260, ROW_H = 16, ROWS = 8;
 
     private TextFieldWidget search, amount;
     private ButtonWidget payBtn;
     private final List<String> all = new ArrayList<>();
+    private final Map<String, PlayerListEntry> entries = new HashMap<>();
     private List<String> filtered = new ArrayList<>();
     private int scroll, listX, listY, top, ay;
     private String selected;
@@ -41,11 +45,15 @@ public class PayScreen extends Screen {
     protected void init() {
         MinecraftClient mc = MinecraftClient.getInstance();
         all.clear();
+        entries.clear();
         if (mc.getNetworkHandler() != null) {
             String me = mc.player != null ? mc.player.getName().getString() : "";
             for (PlayerListEntry e : mc.getNetworkHandler().getPlayerList()) {
                 String n = e.getProfile().getName();
-                if (n != null && !n.equalsIgnoreCase(me)) all.add(n);
+                if (n != null && !n.equalsIgnoreCase(me)) {
+                    all.add(n);
+                    entries.put(n, e);
+                }
             }
         }
         all.sort(String.CASE_INSENSITIVE_ORDER);
@@ -155,7 +163,9 @@ public class PayScreen extends Screen {
             boolean hover = mouseX >= x && mouseX < x + W && mouseY >= y && mouseY < y + ROW_H;
             if (name.equals(selected)) ctx.fill(x, y, x + W, y + ROW_H, 0xAA3A7BD5);
             else if (hover) ctx.fill(x, y, x + W, y + ROW_H, 0x40FFFFFF);
-            ctx.drawText(this.textRenderer, name, x + 4, y + 3, 0xFFFFFF, false);
+            PlayerListEntry pe = entries.get(name);
+            if (pe != null) PlayerSkinDrawer.draw(ctx, pe.getSkinTextures(), x + 3, y + 2, 12);
+            ctx.drawText(this.textRenderer, name, x + 20, y + 4, 0xFFFFFF, false);
         }
         if (filtered.size() > ROWS) {
             int barH = Math.max(10, ROWS * ROW_H * ROWS / filtered.size());
