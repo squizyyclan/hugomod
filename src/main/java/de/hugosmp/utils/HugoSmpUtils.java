@@ -7,6 +7,7 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.PlayerListEntry;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.command.CommandSource;
@@ -26,6 +27,17 @@ public class HugoSmpUtils implements ClientModInitializer {
     public static final Logger LOGGER = LoggerFactory.getLogger("hugosmputils");
 
     public static KeyBinding settingsKey, payKey, bypassKey;
+    private static int rememberTimer = 150;
+
+    private static void rememberOnline(MinecraftClient mc) {
+        if (mc.getNetworkHandler() == null) return;
+        boolean changed = false;
+        for (PlayerListEntry e : mc.getNetworkHandler().getPlayerList()) {
+            String n = e.getProfile().getName();
+            if (n != null && Config.get().remember(n)) changed = true;
+        }
+        if (changed) Config.get().save();
+    }
 
     @Override
     public void onInitializeClient() {
@@ -49,6 +61,10 @@ public class HugoSmpUtils implements ClientModInitializer {
 
         ClientTickEvents.END_CLIENT_TICK.register(mc -> {
             Util.tick(mc);
+            if (++rememberTimer >= 200) {
+                rememberTimer = 0;
+                rememberOnline(mc);
+            }
             OrderAutomation.tick(mc);
             while (settingsKey.wasPressed()) mc.setScreen(new SettingsScreen(null));
             while (payKey.wasPressed()) {
