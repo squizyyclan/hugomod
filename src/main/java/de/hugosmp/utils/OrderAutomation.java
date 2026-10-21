@@ -1,5 +1,6 @@
 package de.hugosmp.utils;
 
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.component.DataComponentTypes;
@@ -12,14 +13,16 @@ import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.text.Text;
 
 import java.math.BigDecimal;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * /order <item>: öffnet das Order-Menü des Servers, wählt die Order mit dem höchsten Preis pro Item,
- * legt die passenden Items aus dem Inventar ein und bestätigt.
- * Die Erkennung läuft über Item-Namen/Lore im Menü (siehe README, falls das Menü anders aufgebaut ist).
+ * legt ALLE passenden Items aus dem Inventar ein und bestätigt - ohne dass du etwas klicken musst.
+ * Was die Mod im Menü sieht, schreibt sie nach config/hugosmputils-order-debug.txt (zum Nachjustieren).
  */
 public final class OrderAutomation {
     private enum Phase { IDLE, WAIT_LIST, WAIT_DELIVER, FILLING, CONFIRM }
@@ -28,10 +31,13 @@ public final class OrderAutomation {
             "(\\d[\\d,]*(?:\\.\\d+)?)(?:\\s*(mio|mrd|kk|k|m|b))?(?!\\w)", Pattern.CASE_INSENSITIVE);
     private static final String[] PRICE_WORDS = {"price", "preis", "each", "per ", "pro ", "/item", "$", "€"};
     private static final String[] CONFIRM_WORDS = {"confirm", "bestätig", "bestaetig", "accept", "deliver", "abgeben", "liefern"};
+    private static final Path DEBUG_FILE = FabricLoader.getInstance().getConfigDir().resolve("hugosmputils-order-debug.txt");
 
     private static Phase phase = Phase.IDLE;
     private static String query = "";
-    private static int timeout, wait, listSyncId = -1, moved;
+    private static int timeout, wait, listSyncId = -1, moved, lastSlot, lastCount, stuck;
+    private static boolean dumpedList, dumpedDeliver;
+    private static StringBuilder log = new StringBuilder();
 
     private OrderAutomation() {}
 
@@ -41,22 +47,53 @@ public final class OrderAutomation {
         timeout = 20 * 12;
         wait = 0;
         moved = 0;
+        stuck = 0;
+        lastSlot = -1;
+        lastCount = -1;
         listSyncId = -1;
+        dumpedList = false;
+        dumpedDeliver = false;
+        log = new StringBuilder("Order-Automatik für: " + query + "\n\n");
     }
 
-    private static void reset() {
+    private static void end(String result, boolean error) {
+        log.append("\nERGEBNIS: ").append(result).append('\n');
+        try {
+            Files.writeString(DEBUG_FILE, log.toString());
+        } catch (Exception ignored) {
+        }
+        if (error) Util.msg(result + " (Details: config/hugosmputils-order-debug.txt)");
+        else Util.msg(result);
         phase = Phase.IDLE;
+    }
+
+    private static void dump(String label, HandledScreen<?> hs, ScreenHandler h, int size) {
+        log.append("=== ").append(label).append(" | Titel: \"").append(hs.getTitle().getString())
+                .append("\" | syncId ").append(h.syncId).append(" ===\n");
+        for (int i = 0; i < size; i++) {
+            ItemStack s = h.getSlot(i).getStack();
+            if (s.isEmpty()) continue;
+            log.append("Slot ").append(i).append(": ").append(Registries.ITEM.getId(s.getItem()).getPath())
+                    .append(" | Name: ").append(s.getName().getString());
+            LoreComponent lore = s.get(DataComponentTypes.LORE);
+            if (lore != null) {
+                StringBuilder l = new StringBuilder();
+                for (Text t : lore.lines()) l.append(t.getString()).append(" / ");
+                log.append(" | Lore: ").append(l);
+            }
+            log.append('\n');
+        }
+        log.append('\n');
     }
 
     public static void tick(MinecraftClient mc) {
         if (phase == Phase.IDLE) return;
         if (mc.player == null || mc.interactionManager == null) {
-            reset();
+            phase = Phase.IDLE;
             return;
         }
         if (--timeout <= 0) {
-            Util.msg("Order-Automatik: Zeitüberschreitung (Menü nicht erkannt?).");
-            reset();
+            end("Order-Automatik: Zeitüberschreitung (Menü nicht erkannt?).", true);
             return;
         }
         if (!(mc.currentScreen instanceof HandledScreen<?> hs)) return;
@@ -81,6 +118,10 @@ public final class OrderAutomation {
                     return;
                 }
                 if (++wait < 4) return; // Inhalt erst "setzen" lassen
+                if (!dumpedList) {
+                    dump("Order-Liste", hs, h, size);
+                    dumpedList = true;
+                }
                 int best = -1;
                 double bestPrice = -1;
                 for (int i = 0; i < size; i++) {
@@ -91,16 +132,16 @@ public final class OrderAutomation {
                     }
                 }
                 if (best < 0) {
-                    Util.msg("Keine Order mit erkennbarem Preis gefunden.");
-                    reset();
+                    end("Keine Order mit erkennbarem Preis gefunden.", true);
                     return;
                 }
+                log.append("Gewählt: Slot ").append(best).append(" (Preis ").append(bestPrice).append(")\n\n");
                 mc.interactionManager.clickSlot(h.syncId, best, 0, SlotActionType.PICKUP, mc.player);
                 Util.msg("Höchste Order gewählt: " + NumberParser.pretty(BigDecimal.valueOf(bestPrice)) + " pro Item.");
                 listSyncId = h.syncId;
                 wait = 0;
                 if (!c.orderAutoFill) {
-                    reset();
+                    end("Order gewählt.", false);
                     return;
                 }
                 phase = Phase.WAIT_DELIVER;
@@ -108,6 +149,10 @@ public final class OrderAutomation {
             case WAIT_DELIVER -> {
                 if (h.syncId == listSyncId) return; // neues Menü noch nicht offen
                 if (++wait < Math.max(1, c.orderDelayTicks)) return;
+                if (!dumpedDeliver) {
+                    dump("Abgabe-Menü", hs, h, size);
+                    dumpedDeliver = true;
+                }
                 phase = Phase.FILLING;
                 wait = 0;
             }
@@ -121,19 +166,25 @@ public final class OrderAutomation {
                         break;
                     }
                 }
-                if (slot >= 0 && moved < 36) {
-                    mc.interactionManager.clickSlot(h.syncId, slot, 0, SlotActionType.QUICK_MOVE, mc.player);
-                    moved++;
-                    return;
+                if (slot >= 0) {
+                    int count = h.getSlot(slot).getStack().getCount();
+                    if (slot == lastSlot && count == lastCount) stuck++;
+                    else stuck = 0;
+                    if (stuck < 3 && moved < 80) {
+                        mc.interactionManager.clickSlot(h.syncId, slot, 0, SlotActionType.QUICK_MOVE, mc.player);
+                        moved++;
+                        lastSlot = slot;
+                        lastCount = count;
+                        return;
+                    }
                 }
+                // nichts mehr da oder nichts mehr verschiebbar
                 if (moved == 0) {
-                    Util.msg("Du hast kein \"" + query + "\" im Inventar.");
-                    reset();
+                    end("Du hast kein \"" + query + "\" im Inventar.", true);
                     return;
                 }
                 if (!c.orderAutoConfirm) {
-                    Util.msg("Items eingelegt - bitte selbst bestätigen.");
-                    reset();
+                    end("Items eingelegt - bitte selbst bestätigen.", false);
                     return;
                 }
                 phase = Phase.CONFIRM;
@@ -144,13 +195,11 @@ public final class OrderAutomation {
                 int slot = findConfirm(h, size);
                 if (slot < 0) {
                     if (wait < 25) return;
-                    Util.msg("Bestätigen-Button nicht gefunden - bitte selbst bestätigen.");
-                    reset();
+                    end("Bestätigen-Button nicht gefunden - bitte selbst bestätigen.", true);
                     return;
                 }
                 mc.interactionManager.clickSlot(h.syncId, slot, 0, SlotActionType.PICKUP, mc.player);
-                Util.msg("Order abgeschlossen.");
-                reset();
+                end("Order abgeschlossen (" + moved + " Stack-Klicks).", false);
             }
             default -> {
             }
