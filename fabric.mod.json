@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "hugosmputils",
+  "version": "${version}",
+  "name": "HugoSMP Utils",
+  "description": "Quality-of-Life Mod für HugoSMP: Zahlen-Kürzel (150k), /pay-Menü, /order-Automatik, Werkzeug-Schutz, Einstellungen.",
+  "authors": ["HugoSMP"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["de.hugosmp.utils.HugoSmpUtils"]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.4",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
