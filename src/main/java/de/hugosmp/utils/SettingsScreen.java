@@ -53,7 +53,7 @@ public class SettingsScreen extends Screen {
                 toggle(left, y, w, "Haltbarkeits-Anzeige", () -> c.durabilityHud, v -> c.durabilityHud = v);
             }
             case 1 -> {
-                toggle(left, y, w, "Pay-Menü bei /pay", () -> c.payGui, v -> c.payGui = v);
+                toggle(left, y, w, "/pay öffnet auch Menü", () -> c.payOverride, v -> c.payOverride = v);
                 toggle(right, y, w, "Hohe Beträge bestätigen", () -> c.payConfirm, v -> c.payConfirm = v);
                 y += 28;
                 field(left, y, w, "Bestätigen ab Betrag", NumberParser.pretty(c.payConfirmAbove).replace(".", ""), s -> {
