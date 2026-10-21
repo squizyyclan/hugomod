@@ -7,6 +7,9 @@ import net.fabricmc.loader.api.FabricLoader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Pattern;
 
 /** Alle Einstellungen. Wird als config/hugosmputils.json gespeichert. */
 public final class Config {
@@ -26,6 +29,7 @@ public final class Config {
     public String payCommand = "pay {player} {amount}";
     public String lastPayPlayer = "";
     public String lastPayAmount = "";
+    public List<String> knownPlayers = new ArrayList<>();
 
     // Order
     public boolean orderEnabled = true;
@@ -41,6 +45,24 @@ public final class Config {
     public boolean toolWarning = true;
     public boolean toolAutoHome = false;
     public String toolHomeName = "home";
+
+    private static final Pattern NAME = Pattern.compile("[A-Za-z0-9_.]{2,20}");
+
+    public static boolean isValidName(String s) {
+        return s != null && NAME.matcher(s.trim()).matches();
+    }
+
+    /** Merkt sich einen Spielernamen (auch offline nutzbar). true = neu hinzugefügt. */
+    public boolean remember(String name) {
+        if (!isValidName(name)) return false;
+        name = name.trim();
+        for (String k : knownPlayers) {
+            if (k.equalsIgnoreCase(name)) return false;
+        }
+        knownPlayers.add(name);
+        if (knownPlayers.size() > 500) knownPlayers.remove(0);
+        return true;
+    }
 
     public static Config get() {
         return instance;
