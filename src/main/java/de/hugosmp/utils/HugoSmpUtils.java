@@ -65,11 +65,21 @@ public class HugoSmpUtils implements ClientModInitializer {
 
     private static void registerCommands() {
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
-            // /pay -> Menü, /pay <args> -> normal an den Server
-            dispatcher.register(literal("pay").requires(s -> !Util.forwarding)
+            // /hugomod -> Pay-Menü, /hugomod settings -> Einstellungen
+            dispatcher.register(literal("hugomod")
                     .executes(ctx -> {
-                        if (Config.get().payGui) Util.openLater(new PayScreen());
-                        else Util.sendCommand("pay");
+                        Util.openLater(new PayScreen());
+                        return 1;
+                    })
+                    .then(literal("settings").executes(ctx -> {
+                        Util.openLater(new SettingsScreen(null));
+                        return 1;
+                    })));
+
+            // /pay: nur abgefangen, wenn in den Einstellungen aktiviert; sonst normal an den Server
+            dispatcher.register(literal("pay").requires(s -> !Util.forwarding && Config.get().payOverride)
+                    .executes(ctx -> {
+                        Util.openLater(new PayScreen());
                         return 1;
                     })
                     .then(argument("args", StringArgumentType.greedyString()).executes(ctx -> {
